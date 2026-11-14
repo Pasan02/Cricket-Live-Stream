@@ -1,0 +1,143 @@
+'use strict';
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const crypto = require('node:crypto');
+const {newDocument, snapshot, mutate, normalizeConfig, normalizeAppearance, replay} = require('./scoring.cjs');
+
+function atomicWrite(file, value) {
+  const temp = `${file}.tmp`;
+  const fd = fs.openSync(temp, 'w', 0o600);
+  try { fs.writeFileSync(fd, JSON.stringify(value, null, 2)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(temp, file);
+}
+function createApp({dataDir, password, addresses = []}) {
+  fs.mkdirSync(dataDir, {recursive: true});
+  const stateFile = path.join(dataDir, 'match.json');
+  let document = newDocument();
+  if (fs.existsSync(stateFile)) {
+    document = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    if (document.format !== 1 || !Number.isSafeInteger(document.revision) || !Array.isArray(document.events) || !Array.isArray(document.requests)) throw new Error('Saved match has an unsupported format.');
+    if (document.config) document.config = normalizeConfig(document.config);
+    document.appearance = normalizeAppearance(document.appearance); replay(document);
+  }
+  const sessions = new Map(), attempts = new Map(), listeners = new Set();
+  const allowed = new Set(['localhost', '127.0.0.1', '[::1]', os.hostname().toLowerCase(), ...addresses]);
+  const assets = {'/': ['index.html', 'text/html'], '/scoring': ['index.html', 'text/html'],
+    '/overlay': ['overlay.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'],
+    '/overlay.js': ['overlay.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
+    '/overlay.css': ['overlay.css', 'text/css']};
+  const json = (res, code, data) => { res.writeHead(code, {'Content-Type': 'application/json; charset=utf-8'}); res.end(JSON.stringify(data)); };
+  const validSession = req => {
+    const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+    const expiry = sessions.get(token);
+    if (expiry && expiry > Date.now()) return true;
+    sessions.delete(token); return false;
+  };
+  const publish = () => {
+    const payload = `data: ${JSON.stringify(snapshot(document))}\n\n`;
+    for (const res of listeners) { if (res.writableLength > 256 * 1024) res.destroy(); else res.write(payload); }
+  };
+  const readBody = req => new Promise((resolve, reject) => {
+    let size = 0, chunks = [];
+    req.on('data', chunk => { size += chunk.length; if (size > 64 * 1024) { chunks = []; reject(Object.assign(new Error('Request too large.'), {status: 413})); req.resume(); } else chunks.push(chunk); });
+    req.on('end', () => { try { const value = JSON.parse(Buffer.concat(chunks).toString() || '{}'); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); resolve(value); } catch { reject(new Error('Invalid JSON object.')); } });
+    req.on('error', reject);
+  });
+  const server = http.createServer(async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'");
+    try {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      if (!allowed.has(url.hostname.toLowerCase())) return json(res, 421, {error: 'Use localhost or this computer’s LAN IP address.'});
+      if (req.method === 'GET') {
+        if (assets[url.pathname]) {
+          const [name, mime] = assets[url.pathname]; res.writeHead(200, {'Content-Type': `${mime}; charset=utf-8`});
+          return res.end(fs.readFileSync(path.join(__dirname, 'public', name)));
+        }
+        if (url.pathname === '/api/state') return json(res, 200, snapshot(document));
+        if (url.pathname === '/api/info') return json(res, 200, {addresses, port: server.address()?.port});
+        if (url.pathname === '/api/session') return json(res, validSession(req) ? 200 : 401, {ok: validSession(req)});
+        if (url.pathname === '/api/export') {
+          if (!validSession(req)) return json(res, 401, {error: 'Sign in to export.'});
+          res.setHeader('Content-Disposition', 'attachment; filename="cricket-match.json"'); return json(res, 200, document);
+        }
+        if (url.pathname === '/api/events') {
+          if (listeners.size >= 32) return json(res, 503, {error: 'Too many connected displays.'});
+          res.writeHead(200, {'Content-Type': 'text/event-stream', Connection: 'keep-alive'});
+          listeners.add(res); res.write(`data: ${JSON.stringify(snapshot(document))}\n\n`);
+          const timer = setInterval(() => res.write(': heartbeat\n\n'), 15000);
+          res.on('close', () => { clearInterval(timer); listeners.delete(res); }); return;
+        }
+        if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
+        return json(res, 404, {error: 'Not found.'});
+      }
+      if (req.method !== 'POST') return json(res, 405, {error: 'Method not allowed.'});
+      if (req.headers.origin !== `http://${req.headers.host}` || req.headers['sec-fetch-site'] === 'cross-site') return json(res, 403, {error: 'Cross-origin request rejected.'});
+      if (!(req.headers['content-type'] || '').startsWith('application/json')) return json(res, 415, {error: 'Use JSON.'});
+      if (url.pathname !== '/api/login' && !validSession(req)) return json(res, 401, {error: 'Sign in with the access code shown in the server terminal.'});
+      const body = await readBody(req);
+      if (url.pathname === '/api/login') {
+        const ip = req.socket.remoteAddress, now = Date.now();
+        const record = attempts.get(ip) || {count: 0, until: now + 600000};
+        if (record.until < now) { record.count = 0; record.until = now + 600000; }
+        if (record.count >= 5) return json(res, 429, {error: 'Too many attempts. Try again in 10 minutes.'});
+        const a = crypto.createHash('sha256').update(String(body.password || '')).digest();
+        const b = crypto.createHash('sha256').update(password).digest();
+        if (!crypto.timingSafeEqual(a, b)) { record.count++; attempts.set(ip, record); return json(res, 401, {error: 'Incorrect access code.'}); }
+        attempts.delete(ip);
+        for (const [key, expiry] of sessions) if (expiry <= now) sessions.delete(key);
+        if (sessions.size >= 100) sessions.delete(sessions.keys().next().value);
+        const token = crypto.randomBytes(32).toString('hex'); sessions.set(token, now + 12 * 3600000);
+        return json(res, 200, {token});
+      }
+      if (url.pathname === '/api/logout') { sessions.delete((req.headers.authorization || '').replace(/^Bearer /, '')); return json(res, 200, {ok: true}); }
+      const action = url.pathname.replace('/api/', '');
+      if (!['setup', 'appearance', 'event', 'undo', 'edit'].includes(action)) return json(res, 404, {error: 'Not found.'});
+      if (!/^[a-zA-Z0-9-]{12,80}$/.test(body.requestId || '')) return json(res, 400, {error: 'Missing request identifier.'});
+      if (document.requests.includes(body.requestId)) return json(res, 200, {ok: true, state: snapshot(document)});
+      if (body.revision !== document.revision) return json(res, 409, {error: 'The score changed in another tab. Check the updated score, then try again.', state: snapshot(document)});
+      const next = mutate(document, action, body);
+      next.requests = [...document.requests, body.requestId].slice(-200);
+      if (action === 'setup' && document.config) {
+        const archive = path.join(dataDir, 'archives'); fs.mkdirSync(archive, {recursive: true});
+        atomicWrite(path.join(archive, `${Date.now()}-${document.revision}.json`), document);
+      }
+      atomicWrite(stateFile, next); // A failed disk write never changes the on-air state.
+      document = next; publish(); json(res, 200, {ok: true, state: snapshot(document)});
+    } catch (error) {
+      if (!res.headersSent) json(res, error.status || 400, {error: error.code ? 'Could not save the match. Check disk space and folder permissions.' : error.message});
+      else res.end();
+    }
+  });
+  server.headersTimeout = 10000; server.requestTimeout = 15000; server.maxHeadersCount = 50;
+  server.on('close', () => { for (const res of listeners) res.destroy(); });
+  server.stop = () => { for (const res of listeners) res.end(); server.close(); server.closeIdleConnections(); };
+  return server;
+}
+if (require.main === module) {
+  const args = process.argv.slice(2), lan = args.includes('--lan');
+  const portIndex = args.indexOf('--port'), port = portIndex >= 0 ? Number(args[portIndex + 1]) : 5080;
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || args.some((arg, i) => !['--lan', '--port'].includes(arg) && !(portIndex >= 0 && i === portIndex + 1))) { console.error('Usage: node local/server.cjs [--lan] [--port 5080]'); process.exit(1); }
+  const addresses = Object.values(os.networkInterfaces()).flat().filter(n => n.family === 'IPv4' && !n.internal).map(n => n.address);
+  const dataDir = process.env.SCOREBOARD_DATA_DIR || path.join(__dirname, '..', '.local-scoreboard');
+  fs.mkdirSync(dataDir, {recursive: true});
+  const codeFile = path.join(dataDir, 'access-code.txt');
+  if (!fs.existsSync(codeFile)) fs.writeFileSync(codeFile, crypto.randomBytes(9).toString('base64url'), {mode: 0o600});
+  const password = process.env.SCOREBOARD_PASSWORD || fs.readFileSync(codeFile, 'utf8').trim();
+  if (password.length < 8) { console.error('Access code must contain at least 8 characters.'); process.exit(1); }
+  try {
+    const server = createApp({dataDir, password, addresses});
+    server.on('error', error => { console.error(`Could not start: ${error.message}`); process.exitCode = 1; });
+    server.listen(port, lan ? '0.0.0.0' : '127.0.0.1', () => {
+      console.log(`\nCricketStream Local\nScoring: http://127.0.0.1:${port}\nOBS overlay: http://127.0.0.1:${port}/overlay\nAccess code: ${password}\n`);
+      if (lan) { for (const address of addresses) console.log(`LAN scoring: http://${address}:${port}`); console.log('Use a private network. Allow the firewall on Private networks only.'); }
+      else console.log('Local access only. Use npm run start:lan for phone/tablet scoring.');
+    });
+    process.on('SIGINT', () => server.stop()); process.on('SIGTERM', () => server.stop());
+  } catch (error) { console.error(`Could not load saved match; no files changed: ${error.message}`); process.exitCode = 1; }
+}
+module.exports = {createApp, atomicWrite};

@@ -1,0 +1,14 @@
+{
+  "name": "cricketstream-local",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local cricket scoring and OBS overlays, without broadcast automation or cloud services",
+  "license": "GPL-3.0-only",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node local/server.cjs",
+    "start:lan": "node local/server.cjs --lan",
+    "test": "node --test local/*.test.cjs",
+    "check": "node --check local/server.cjs && node --check local/scoring.cjs && node --check local/public/app.js && node --check local/public/overlay.js"
+  }
+}

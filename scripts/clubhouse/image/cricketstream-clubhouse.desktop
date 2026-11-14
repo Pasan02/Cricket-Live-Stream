@@ -1,6 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=CricketStream clubhouse screen
-Comment=The clubhouse touch screen for CricketStream
-Exec=/opt/cricketstream/clubhouse-start.sh
-X-GNOME-Autostart-enabled=true
