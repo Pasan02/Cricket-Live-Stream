@@ -9,6 +9,6 @@
     "start": "node local/server.cjs",
     "start:lan": "node local/server.cjs --lan",
     "test": "node --test local/*.test.cjs",
-    "check": "node --check local/server.cjs && node --check local/scoring.cjs && node --check local/logos.cjs && node --check local/public/app.js && node --check local/public/overlay.js"
+    "check": "node --check local/server.cjs && node --check local/scoring.cjs && node --check local/logos.cjs && node --check local/public/media.js && node --check local/public/app.js && node --check local/public/overlay.js && node --check local/public/summary.js"
   }
 }

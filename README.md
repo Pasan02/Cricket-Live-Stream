@@ -14,7 +14,7 @@ Or run from this folder:
 npm run start:lan
 ```
 
-For access on this computer only, double-click **Start-Scoreboard.cmd** or run `npm start`. The default port is 5080; change it with `npm run start:lan -- --port 5081`. Stop the server with Ctrl+C.
+For access on this computer only, double-click **Start-Scoreboard.cmd** or run `npm start`. The default port is 5081; change it with `npm run start:lan -- --port 5082`. Stop the server with Ctrl+C.
 
 If Windows asks for firewall access, allow **Private networks**. Use a trusted network, not public or guest Wi-Fi. Remote devices must use the server's LAN address, not `localhost`.
 
@@ -22,21 +22,47 @@ If Windows asks for firewall access, allow **Private networks**. Use a trusted n
 
 | Purpose | On the server computer | On another device |
 | --- | --- | --- |
-| Scoring desk | `http://127.0.0.1:5080/scoring` | `http://<server-IP>:5080/scoring` |
-| OBS Browser Source | `http://127.0.0.1:5080/overlay` | `http://<server-IP>:5080/overlay` |
+| Scoring desk | `http://127.0.0.1:5081/scoring` | `http://<server-IP>:5081/scoring` |
+| OBS Browser Source | `http://127.0.0.1:5081/overlay` | `http://<server-IP>:5081/overlay` |
 
 1. Open the scoring desk and enter the access code printed in the terminal.
 2. In **Match setup**, enter the teams and playing XIs in batting order. Blank places get placeholder names. Start the match and select the opening bowler.
 3. In OBS, add a **Browser Source** with the overlay URL, width **1920**, height **1080**. Place it above your HD8 camera/program source. The background is transparent.
 4. Use **Overlay studio** to change colours, title, size, margins and visibility. It keeps the original Classic scorebar style.
 
-In **Overlay studio → Team logos**, upload a PNG, JPEG or WebP for each team (up to 5 MB). Images are resized to 256 × 256 with their proportions and transparency preserved, then saved inside your local match file. Logos update on connected displays immediately and follow the correct team when batting changes. Use **Replace logo** or **Remove** to change them. JSON match exports and archives include the logo image data; no separate image folder is needed.
+In **Overlay studio → Team logos**, upload a PNG, JPEG, WebP, H.264 MP4 or VP8/VP9 WebM for each team (up to 5 MB). Images are resized to 256 × 256 with their proportions and transparency preserved, then saved inside your local match file. Logos update on connected displays immediately and follow the correct team when batting changes. Use **Replace logo** or **Remove** to change them. JSON match exports and archives include the logo media data; no separate media folder is needed.
 
 The scorebar has larger team logo areas, with a default 56 px logo size and extra padding. Change **Team logo size** between 32 and 72 px to suit your artwork.
 
-Under **Channel & sponsor logos**, upload separate images for the **top-left channel** and **top-right sponsor** positions. Each has its own width, top margin, side margin and visibility setting in **Top corner logo placement**. Click **Apply to broadcast** to save those placement changes. Wide branding images keep their proportions; both corner logos are independent of the scorebar's size and visibility. They are also included in match exports and archives. After upgrading, refresh the OBS Browser Source once to load the new corner-logo elements.
+Under **Channel & sponsor logos**, upload separate images, H.264 MP4 or WebM videos for the **top-right channel** and **top-left sponsor** positions. Each has its own width, top margin, side margin and visibility setting in **Top corner logo placement**. Click **Apply to broadcast** to save those placement changes. Wide branding images keep their proportions; both corner logos are independent of the scorebar's size and visibility. They are also included in match exports and archives. After upgrading, refresh the OBS Browser Source once to load the new corner-logo elements.
 
 Your existing ATEM HD8 switching, camera inputs, commentary audio and YouTube streaming remain in your production setup. This app supplies the graphics only. Multiple scoring tabs and overlay displays can connect independently. The overlay is read-only and needs no login; changing scores requires the access code.
+
+Video logos play automatically, loop and stay muted in all four logo slots. Upload **H.264 MP4** or **VP8/VP9 WebM**, up to **5 MB**, **60 seconds** and **1920 x 1080**. WebM files must include duration metadata. Optional audio must be AAC for MP4 or Opus/Vorbis for WebM and is never played.
+
+For transparent animated logos, upload a **WebM with an alpha channel**. The app saves and serves the original video bytes without conversion, resizing, padding or flattening. It adds no background to the video or its preview. An opaque background already encoded in a file remains. PNG and WebP also support transparent static artwork.
+
+The server checks video container metadata, declared codecs, dimensions and duration, and serves videos locally with byte-range support. Keep clips small: embedded video data is included whenever the match is saved or exported. No FFmpeg or video conversion dependency is required. MOV uploads are not accepted; export your animation as WebM before uploading. After upgrading, restart the app and refresh scoring/OBS sources.
+
+## Summary graphics
+
+Add these **three separate Browser Sources** to three OBS scenes, each at **1920 x 1080**. Prefix each path with your server address, for example `http://192.168.1.10:5081`. The scoring desk has individual copy buttons.
+
+| OBS scene | URL path | Graphic |
+| --- | --- | --- |
+| Innings scorecard | `/overlay?view=scorecard` | Batters, dismissals, runs, balls, boundaries, strike rate and bowling figures |
+| Match summary | `/overlay?view=match` | Both innings, leading performers and the live situation or final result |
+| Bowling analysis | `/overlay?view=bowling` | Overs, maidens, runs conceded, wickets and economy in bowling order |
+
+Each URL stays on its own graphic; switch scenes or source visibility in OBS. The scorecard and bowling analysis follow the current innings independently of the main-source controls. Add `&innings=1` or `&innings=2` to pin a particular innings. An innings that has not begun shows a waiting message. Your existing live scorebar is still at `/overlay`.
+
+Under **Optional: switch graphics on the main scorebar source**, you can change the main overlay instead. These buttons and the main-source innings selector do not change the three dedicated sources.
+
+The summary cards use the earlier Classic light panels and team-colour accents. Panel and text colours from Overlay studio apply to the summaries as well as the scorebar. Corrected cricket terminology and the three independent OBS URLs are retained. Uploaded team, channel and sponsor logos can appear on all graphics.
+
+Labels use **Innings scorecard**, **Match summary** and **Bowling analysis**. Batters who have not appeared are **yet to bat** during the innings and **did not bat** after it ends. Bowling economy is runs conceded per over, calculated from legal balls. Figures update after corrections and undo.
+
+This version uses port **5081** to avoid older instances still running on 5080. Update your OBS URL to `http://<server-IP>:5081/overlay`. Old scoring pages detect an incompatible server after refresh and open the new port. Close any old CricketStream terminals when convenient. Starting another copy on an occupied port is refused. Your existing `.local-scoreboard` match, logos and access code are preserved.
 
 ## Scoring controls
 
@@ -58,7 +84,7 @@ The random access code is stored in **.local-scoreboard/access-code.txt**. Prote
 
 ## Security
 
-- Localhost is the default; LAN access is explicit. Do not forward port 5080 to the internet or expose it through a tunnel.
+- Localhost is the default; LAN access is explicit. Do not forward port 5081 to the internet or expose it through a tunnel.
 - LAN HTTP is unencrypted. A trusted private network and unique access code are essential. Use a normal user account, not Administrator.
 - All scoring changes, appearance changes and exports require an authenticated session. Sessions expire after 12 hours or when the server restarts. Repeated incorrect logins are limited.
 - Devices that can reach the server can read match data and the graphics without logging in. There are no separate scorer/admin roles.

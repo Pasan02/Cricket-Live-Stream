@@ -33,13 +33,15 @@ const defaults = () => ({title: 'LIVE CRICKET', homeColour: '#1a3a5c', awayColou
   visible: true, ticker: true, flash: true, homeLogo: '', awayLogo: '', teamLogoSize: 56,
   channelLogo: '', sponsorLogo: '', channelVisible: true, sponsorVisible: true,
   channelLogoWidth: 140, sponsorLogoWidth: 220, channelLogoTop: 40, sponsorLogoTop: 40,
-  channelLogoSide: 40, sponsorLogoSide: 40});
+  channelLogoSide: 40, sponsorLogoSide: 40, summaryType: 'none', summaryInnings: 'current'});
 function normalizeAppearance(raw) {
   const out = {...defaults(), ...raw};
   for (const key of ['homeColour', 'awayColour', 'panelColour', 'textColour'])
     requireThat(/^#[0-9a-f]{6}$/i.test(out[key]), 'Choose a valid colour.');
   for (const key of ['visible', 'ticker', 'flash', 'channelVisible', 'sponsorVisible']) requireThat(typeof out[key] === 'boolean', 'Invalid display setting.');
-  for (const key of ['homeLogo', 'awayLogo', 'channelLogo', 'sponsorLogo']) requireThat(typeof out[key] === 'string' && (out[key] === '' || /^\/logos\/[a-f0-9]{64}\.png$/.test(out[key])), 'Invalid logo.');
+  for (const key of ['homeLogo', 'awayLogo', 'channelLogo', 'sponsorLogo']) requireThat(typeof out[key] === 'string' && (out[key] === '' || /^\/logos\/[a-f0-9]{64}\.(png|mp4|webm)$/.test(out[key])), 'Invalid logo.');
+  requireThat(['none', 'scorecard', 'match', 'bowling'].includes(out.summaryType), 'Choose a valid summary graphic.');
+  requireThat(['current', '1', '2'].includes(out.summaryInnings), 'Choose the current, first or second innings.');
   return {title: text(out.title), homeColour: out.homeColour, awayColour: out.awayColour,
     panelColour: out.panelColour, textColour: out.textColour, scale: integer(out.scale, 60, 100, 'Scale'),
     bottom: integer(out.bottom, 0, 200, 'Bottom margin'), side: integer(out.side, 0, 200, 'Side margin'),
@@ -48,7 +50,8 @@ function normalizeAppearance(raw) {
     channelVisible: out.channelVisible, sponsorVisible: out.sponsorVisible,
     channelLogoWidth: integer(out.channelLogoWidth, 60, 360, 'Channel logo width'), sponsorLogoWidth: integer(out.sponsorLogoWidth, 60, 360, 'Sponsor logo width'),
     channelLogoTop: integer(out.channelLogoTop, 0, 300, 'Channel top margin'), sponsorLogoTop: integer(out.sponsorLogoTop, 0, 300, 'Sponsor top margin'),
-    channelLogoSide: integer(out.channelLogoSide, 0, 300, 'Channel side margin'), sponsorLogoSide: integer(out.sponsorLogoSide, 0, 300, 'Sponsor side margin')};
+    channelLogoSide: integer(out.channelLogoSide, 0, 300, 'Channel side margin'), sponsorLogoSide: integer(out.sponsorLogoSide, 0, 300, 'Sponsor side margin'),
+    summaryType: out.summaryType, summaryInnings: out.summaryInnings};
 }
 function newDocument() { return {format: 1, revision: 0, config: null, appearance: defaults(), events: [], requests: []}; }
 const overs = balls => `${Math.floor(balls / 6)}.${balls % 6}`;
@@ -175,6 +178,7 @@ function mutate(original, action, body) {
   if (action === 'setup') {
     requireThat(!doc.config || body.replace === true, 'Confirm starting a new match.');
     doc.config = normalizeConfig(body.config || {}); doc.events = [];
+    doc.appearance.summaryType = 'none'; doc.appearance.summaryInnings = 'current';
   } else if (action === 'appearance') {
     doc.appearance = normalizeAppearance({...doc.appearance, ...(body.appearance || {})});
   } else {

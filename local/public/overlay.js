@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const preview = new URLSearchParams(location.search).has('preview');
+const parameters = new URLSearchParams(location.search);
+const preview = parameters.has('preview');
 const overs = balls => `${Math.floor(balls / 6)}.${balls % 6}`;
 let initialized = false, lastBallKey = '', lastBallCount = 0, timer;
 function span(text, className) { const el = document.createElement('span'); el.textContent = text; if (className) el.className = className; return el; }
@@ -10,7 +11,7 @@ function team(id, name, logo) {
   if (container.dataset.logoKey === key) return;
   container.dataset.logoKey = key; container.replaceChildren();
   if (logo) {
-    const image = document.createElement('img'); image.className = 'team-logo'; image.alt = ''; image.src = logo;
+    const image = createLogoMedia(logo, 'team-logo');
     image.addEventListener('error', () => image.remove()); container.append(image);
   }
   container.append(span(name, 'team-name'));
@@ -19,13 +20,13 @@ function cornerLogo(slot, appearance) {
   const image = $(slot + '-corner-logo'), src = appearance[slot + 'Logo'] || '';
   if (image.dataset.source !== src) {
     image.dataset.source = src;
-    if (src) image.src = src; else image.removeAttribute('src');
+    image.replaceChildren(...(src ? [createLogoMedia(src, 'corner-media')] : []));
   }
   image.hidden = !src || appearance[slot + 'Visible'] === false;
   image.style.width = `${appearance[slot + 'LogoWidth']}px`;
   image.style.top = `${appearance[slot + 'LogoTop']}px`;
   image.style.maxHeight = `${540 - appearance[slot + 'LogoTop']}px`;
-  image.style[slot === 'channel' ? 'left' : 'right'] = `${appearance[slot + 'LogoSide']}px`;
+  image.style[slot === 'channel' ? 'right' : 'left'] = `${appearance[slot + 'LogoSide']}px`;
 }
 function render(data) {
   document.body.dataset.offline = 'false';
@@ -35,6 +36,10 @@ function render(data) {
   const inn = data.current || {homeBatting: true, total: 0, wickets: 0, legal: 0, number: 1,
     striker: 0, nonStriker: 1, batters: [{name: 'Opening batter', runs: 0, balls: 0}, {name: 'Opening batter', runs: 0, balls: 0}], bowlers: {}, bowler: '', thisOver: [], completedOvers: [], target: null};
   $('graphic').hidden = !a.visible || (!data.active && !preview);
+  const view = parameters.get('view'), forced = ['scorecard', 'match', 'bowling'].includes(view);
+  const summary = forced ? view : a.summaryType;
+  if (typeof renderSummary === 'function') renderSummary(data, summary, parameters.get('innings') || (forced ? 'current' : a.summaryInnings));
+  if (forced || summary !== 'none') $('graphic').hidden = true;
   const g = $('graphic'); g.style.left = `${a.side}px`; g.style.width = `${1920 - a.side * 2}px`; g.style.bottom = `${a.bottom}px`; g.style.transform = `scale(${a.scale / 100})`;
   g.style.setProperty('--bat', inn.homeBatting ? a.homeColour : a.awayColour);
   g.style.setProperty('--bowl', inn.homeBatting ? a.awayColour : a.homeColour);
@@ -64,5 +69,15 @@ function render(data) {
   initialized = true; lastBallKey = key; lastBallCount = data.history.length;
 }
 const events = new EventSource('/api/events');
-events.onmessage = event => { try { render(JSON.parse(event.data)); } catch (error) { console.error('Overlay update failed:', error); } };
+events.onmessage = event => {
+  try {
+    const data = JSON.parse(event.data);
+    if (typeof data.appearance?.summaryType !== 'string') {
+      events.close();
+      if (location.port !== '5081') { const target = new URL(location.href); target.port = '5081'; location.replace(target.href); }
+      return;
+    }
+    render(data);
+  } catch (error) { console.error('Overlay update failed:', error); }
+};
 events.onerror = () => { document.body.dataset.offline = 'true'; };

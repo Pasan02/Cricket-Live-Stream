@@ -3,4 +3,6 @@
 #scorebar .batter{flex:1 1 auto;min-width:150px}#scorebar .bowler{flex-shrink:1;min-width:180px}
 
 #scorebar{height:calc(var(--team-logo-size,56px) + 32px)}#scorebar .team{gap:14px;padding:0 20px;min-width:180px;max-width:260px;flex:0 1 240px}#bowling-team{min-width:180px;max-width:240px}.team-logo{width:var(--team-logo-size,56px);height:var(--team-logo-size,56px);object-fit:contain;flex-shrink:0}.team-name{overflow:hidden;text-overflow:ellipsis;min-width:0}#scorebar .over{flex-shrink:1;min-width:150px}#moment{bottom:calc(var(--team-logo-size,56px) + 80px)}
-.corner-logo{position:absolute;max-height:180px;object-fit:contain;pointer-events:none}.channel-corner{object-position:top left}.sponsor-corner{object-position:top right}body[data-offline=true] .corner-logo{opacity:.7}[hidden]{display:none!important}
+.corner-logo{position:absolute;max-height:180px;object-fit:contain;pointer-events:none}.channel-corner{object-position:top right}.sponsor-corner{object-position:top left}body[data-offline=true] .corner-logo{opacity:.7}[hidden]{display:none!important}
+.corner-media{display:block;width:100%;height:auto;max-height:inherit;object-fit:contain;object-position:inherit}
+video.team-logo,video.summary-logo,video.corner-media{background:transparent}

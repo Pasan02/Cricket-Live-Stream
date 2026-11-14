@@ -2,6 +2,12 @@
 const $ = id => document.getElementById(id);
 let state = null, pending = false, logoBusy = false, connected = false, initialTab = false, initializedForms = false, editing = null, editingRevision = null, toastTimer;
 let token = sessionStorage.getItem('cricketstream-local-token') || '';
+const runtimeReady = fetch('/api/info').then(r => r.json()).then(info => {
+  if (info.apiVersion === 3) return info;
+  if (location.port !== '5081') { const target = new URL(location.href); target.port = '5081'; location.replace(target.href); return null; }
+  toast('This page reached an older server. Close old CricketStream terminals and run Start-Scoreboard-LAN.cmd again.');
+  return null;
+}).catch(() => { toast('Could not reach the current scoreboard server. Start the app and refresh this page.'); return null; });
 const overs = balls => `${Math.floor(balls / 6)}.${balls % 6}`;
 function el(tag, content, className) { const node = document.createElement(tag); if (content !== undefined) node.textContent = content; if (className) node.className = className; return node; }
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 6500); }
@@ -14,7 +20,7 @@ document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', 
 function showLogin() { token = ''; sessionStorage.removeItem('cricketstream-local-token'); $('logout').hidden = true; if (!$('login-dialog').open) $('login-dialog').showModal(); updateControls(); }
 $('login-dialog').addEventListener('cancel', event => event.preventDefault());
 $('login-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = event.submitter; button.disabled = true;
+  event.preventDefault(); if (!await runtimeReady) return; const button = event.submitter; button.disabled = true;
   try {
     const response = await fetch('/api/login', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password: $('password').value})});
     const data = await response.json(); if (!response.ok) throw new Error(data.error);
@@ -48,6 +54,7 @@ function updateControls() {
   $('choose-batter').disabled = locked || !newBatterCanChange();
   $('undo').disabled = locked || !state?.active || state.current === null || !state.history.length && !state.current.bowler;
   $('export').disabled = locked || !state?.active;
+  document.querySelectorAll('[data-summary], #summary-innings').forEach(button => button.disabled = locked || !state?.active);
   document.querySelectorAll('#appearance-form button, #setup-form button, #history button, #action-content button, #match-notice button').forEach(b => b.disabled = locked);
   document.querySelectorAll('[data-logo-upload]').forEach(b => b.disabled = locked);
   document.querySelectorAll('[data-logo-remove]').forEach(b => b.disabled = locked || !state.appearance[b.dataset.logoRemove + 'Logo']);
@@ -65,6 +72,10 @@ function fillForms() {
 function render(data) {
   if (state && data.revision < state.revision) return;
   state = data;
+  $('summary-innings').value = data.appearance.summaryInnings;
+  const summaryNames = {none: 'Scorebar only', scorecard: 'Innings scorecard on main source', match: 'Match summary on main source', bowling: 'Bowling analysis on main source'};
+  $('summary-status').textContent = summaryNames[data.appearance.summaryType];
+  document.querySelectorAll('[data-summary]').forEach(button => button.classList.toggle('on-air', button.dataset.summary === data.appearance.summaryType));
   renderTeamLogos();
   if (!initializedForms) { fillForms(); initializedForms = true; }
   if (!initialTab) { tab(data.active ? 'score' : 'setup'); initialTab = true; }
@@ -91,20 +102,30 @@ function render(data) {
   updateControls();
 }
 function renderTeamLogos() {
-  const labels = {home: 'Home team', away: 'Away team', channel: 'Channel - top left', sponsor: 'Sponsor - top right'};
+  const labels = {home: 'Home team', away: 'Away team', channel: 'Channel - top right', sponsor: 'Sponsor - top left'};
   for (const side of ['home', 'away', 'channel', 'sponsor']) {
     const image = $(side + '-logo-preview'), placeholder = $(side + '-logo-placeholder');
     const src = state.appearance[side + 'Logo'] || '';
     $(side + '-logo-name').textContent = state.config?.[side] || labels[side];
     if (image.dataset.source !== src) {
       image.dataset.source = src; image.hidden = !src; placeholder.hidden = Boolean(src);
-      if (src) image.src = src; else image.removeAttribute('src');
+      image.parentElement.classList.toggle('video-logo', /\.(mp4|webm)$/.test(src));
+      image.replaceChildren();
+      if (src) {
+        const media = createLogoMedia(src);
+        media.addEventListener('error', () => { image.hidden = true; placeholder.hidden = false; placeholder.textContent = 'Could not play or display this logo'; });
+        image.append(media);
+      }
     }
   }
 }
 async function logoData(file, side) {
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Choose a PNG, JPEG or WebP image.');
-  if (file.size > 5 * 1024 * 1024) throw new Error('Choose an image smaller than 5 MB.');
+  const webm = file.type === 'video/webm' || /\.webm$/i.test(file.name);
+  const video = webm || file.type === 'video/mp4' || /\.mp4$/i.test(file.name);
+  if (!video && !['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Choose a PNG, JPEG, WebP image, H.264 MP4 or WebM video.');
+  if (webm && !(await runtimeReady)?.webmLogos) throw new Error('Restart the scoreboard server and refresh this page to enable WebM logos.');
+  if (video && !(await runtimeReady)?.videoLogos) throw new Error('Restart the scoreboard server and refresh this page to enable MP4 logos.');
+  if (file.size > 5 * 1024 * 1024) throw new Error('Choose a file no larger than 5 MB.');
   // The server permits data: images. FileReader avoids a blob: preview URL,
   // which is blocked by the image policy in already-running server instances.
   const source = await new Promise((resolve, reject) => {
@@ -114,6 +135,21 @@ async function logoData(file, side) {
     reader.onabort = () => reject(new Error('Image reading was cancelled.'));
     reader.readAsDataURL(file);
   });
+  if (video) {
+    const videoSource = (webm ? 'data:video/webm;base64,' : 'data:video/mp4;base64,') + source.slice(source.indexOf(',') + 1);
+    const clip = createLogoMedia(videoSource); clip.autoplay = false; clip.preload = 'metadata';
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Could not read the video. Use H.264 MP4 or VP8/VP9 WebM.')), 10000);
+        clip.onloadedmetadata = () => { clearTimeout(timer); resolve(); };
+        clip.onerror = () => { clearTimeout(timer); reject(new Error('Could not open the video. Use H.264 MP4 or VP8/VP9 WebM.')); };
+        clip.src = videoSource;
+      });
+      if (!Number.isFinite(clip.duration) || clip.duration <= 0 || clip.duration > 60) throw new Error('Video logos must be no longer than 60 seconds.');
+      if (!clip.videoWidth || !clip.videoHeight || clip.videoWidth > 1920 || clip.videoHeight > 1080) throw new Error('Video logo resolution must be at most 1920 x 1080.');
+      return videoSource;
+    } finally { clip.pause(); clip.removeAttribute('src'); clip.load(); }
+  }
   const image = new Image();
   await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(new Error('This image could not be opened.')); image.src = source; });
   if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth * image.naturalHeight > 16000000) throw new Error('Choose an image with no more than 16 million pixels.');
@@ -131,11 +167,13 @@ for (const side of ['home', 'away', 'channel', 'sponsor']) {
   $(side + '-logo-input').addEventListener('change', async event => {
     const file = event.target.files[0]; if (!file) return;
     logoBusy = true; updateControls();
-    try { const data = await logoData(file, side); if (await post('logo', {side, data})) toast('Logo updated on all displays.'); }
+    try {
+      const data = await logoData(file, side);
+      if (await post('logo', {side, data})) toast('Logo updated on all displays.');
+    }
     catch (error) { toast(error.message || 'Could not upload the logo.'); }
     finally { event.target.value = ''; logoBusy = false; updateControls(); }
   });
-  $(side + '-logo-preview').addEventListener('error', () => { $(side + '-logo-preview').hidden = true; $(side + '-logo-placeholder').hidden = false; });
 }
 document.querySelectorAll('[data-logo-remove]').forEach(button => button.addEventListener('click', async () => { if (await post('logo', {side: button.dataset.logoRemove, data: null})) toast('Logo removed.'); }));
 function renderHistory() {
@@ -146,8 +184,8 @@ function renderScorecard() {
   const out = $('scorecard'); out.replaceChildren();
   for (const inn of state.innings) {
     out.append(el('h3', `${inn.batting} · ${inn.total}/${inn.wickets} (${overs(inn.legal)} overs)`));
-    const table = el('table'), head = el('thead'), tr = el('tr'); for (const title of ['BATTER', 'DISMISSAL', 'R', 'B', '4', '6']) tr.append(el('th', title)); head.append(tr); table.append(head);
-    const body = el('tbody'); inn.batters.forEach((b, index) => { const row = el('tr'); const played = b.balls > 0 || b.runs > 0 || b.out || index < inn.nextBat; for (const value of [b.name, b.out || (played ? 'not out' : 'did not bat'), b.runs, b.balls, b.fours, b.sixes]) row.append(el('td', value)); body.append(row); }); table.append(body); out.append(table, el('p', `Extras ${inn.extras} · Partnership ${inn.partnershipRuns} (${inn.partnershipBalls} balls)`, 'small muted'));
+    const table = el('table'), head = el('thead'), tr = el('tr'); for (const title of ['BATTER', 'DISMISSAL', 'R', 'B', '4s', '6s']) tr.append(el('th', title)); head.append(tr); table.append(head);
+    const body = el('tbody'); inn.batters.forEach((b, index) => { const row = el('tr'); const played = b.balls > 0 || b.runs > 0 || b.out || index < inn.nextBat; for (const value of [b.name, b.out || (played ? 'not out' : inn.ended || inn.wickets >= 10 || inn.legal >= state.config.maxOvers * 6 || (inn.target !== null && inn.total >= inn.target) ? 'did not bat' : 'yet to bat'), b.runs, b.balls, b.fours, b.sixes]) row.append(el('td', value)); body.append(row); }); table.append(body); out.append(table, el('p', `Extras ${inn.extras} · Partnership ${inn.partnershipRuns} (${inn.partnershipBalls} balls)`, 'small muted'));
     const bowling = el('table'), bh = el('tr'); for (const title of ['BOWLER', 'O', 'M', 'R', 'W']) bh.append(el('th', title)); const bhead = el('thead'); bhead.append(bh); bowling.append(bhead); const bb = el('tbody');
     Object.values(inn.bowlers).forEach(b => { const row = el('tr'); for (const value of [b.name, overs(b.legal), b.maidens, b.runs, b.wickets]) row.append(el('td', value)); bb.append(row); }); bowling.append(bb); out.append(bowling);
   }
@@ -199,13 +237,25 @@ $('appearance-form').addEventListener('submit', async event => {
   if (await post('appearance', {appearance})) toast('Overlay appearance updated.');
 });
 $('overlay-url').value = location.origin + '/overlay';
+document.querySelectorAll('[data-summary-link]').forEach(link => link.href = location.origin + '/overlay?view=' + link.dataset.summaryLink);
+for (const mode of ['scorecard', 'match', 'bowling']) $(mode + '-url').value = location.origin + '/overlay?view=' + mode;
+document.querySelectorAll('[data-copy-summary]').forEach(button => button.addEventListener('click', async () => {
+  const input = $(button.dataset.copySummary + '-url');
+  try { await navigator.clipboard.writeText(input.value); toast('OBS source URL copied.'); }
+  catch { input.select(); toast('Select and copy this OBS source URL.'); }
+}));
+document.querySelectorAll('[data-summary]').forEach(button => button.addEventListener('click', () => post('appearance', {appearance: {summaryType: button.dataset.summary, summaryInnings: $('summary-innings').value}})));
+$('summary-innings').addEventListener('change', event => post('appearance', {appearance: {summaryInnings: event.target.value}}));
 $('copy-url').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('overlay-url').value); toast('Overlay URL copied.'); } catch { $('overlay-url').select(); toast('Select and copy this overlay URL.'); } });
 $('export').addEventListener('click', async () => {
   try { const response = await fetch('/api/export', {headers: {Authorization: 'Bearer ' + token}}); if (response.status === 401) { showLogin(); return; } if (!response.ok) throw new Error(); const blob = await response.blob(), url = URL.createObjectURL(blob), a = el('a'); a.href = url; a.download = 'cricket-match.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch { toast('Could not export the match.'); }
 });
-fetch('/api/info').then(r => r.json()).then(info => { $('network-info').textContent = info.addresses.length ? 'On the same network, open: ' + info.addresses.map(ip => `http://${ip}:${info.port}`).join(' or ') : 'No LAN address detected. Connect this computer to your private network.'; }).catch(() => $('network-info').textContent = 'Could not read network addresses.');
-const events = new EventSource('/api/events');
-events.onmessage = event => { try { const data = JSON.parse(event.data); setConnected(true); render(data); } catch (error) { console.error(error); toast('Could not read a score update. Refresh the page.'); } };
-events.onerror = () => setConnected(false);
-if (!token) showLogin();
-else fetch('/api/session', {headers: {Authorization: 'Bearer ' + token}}).then(r => { if (r.status === 401) showLogin(); else $('logout').hidden = false; }).catch(() => toast('Could not verify your session.'));
+runtimeReady.then(info => {
+  if (!info) return;
+  $('network-info').textContent = info.addresses.length ? 'On the same network, open: ' + info.addresses.map(ip => `http://${ip}:${info.port}`).join(' or ') : 'No LAN address detected. Connect this computer to your private network.';
+  const events = new EventSource('/api/events');
+  events.onmessage = event => { try { const data = JSON.parse(event.data); setConnected(true); render(data); } catch (error) { console.error(error); toast('Could not read a score update. Refresh the page.'); } };
+  events.onerror = () => setConnected(false);
+  if (!token) showLogin();
+  else fetch('/api/session', {headers: {Authorization: 'Bearer ' + token}}).then(r => { if (r.status === 401) showLogin(); else $('logout').hidden = false; }).catch(() => toast('Could not verify your session.'));
+});
