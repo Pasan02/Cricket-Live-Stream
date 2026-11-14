@@ -91,3 +91,12 @@ test('player names that match JavaScript object properties remain ordinary bowle
     assert.equal(Object.prototype.runs, undefined);
   }
 });
+test('logo placement accepts valid bounds and rejects unsafe or invalid values', () => {
+  const doc = newDocument();
+  assert.equal(doc.appearance.teamLogoSize, 56);
+  assert.equal(doc.appearance.channelLogoTop, 40);
+  assert.equal(doc.appearance.sponsorLogoSide, 40);
+  for (const appearance of [{teamLogoSize: 1000}, {channelLogoTop: -1}, {sponsorLogoWidth: 361}, {channelLogoSide: '40'}, {sponsorVisible: 'yes'}, {channelLogo: 'https://external.example/logo.png'}]) {
+    assert.throws(() => mutate(doc, 'appearance', {appearance}));
+  }
+});

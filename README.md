@@ -30,6 +30,12 @@ If Windows asks for firewall access, allow **Private networks**. Use a trusted n
 3. In OBS, add a **Browser Source** with the overlay URL, width **1920**, height **1080**. Place it above your HD8 camera/program source. The background is transparent.
 4. Use **Overlay studio** to change colours, title, size, margins and visibility. It keeps the original Classic scorebar style.
 
+In **Overlay studio → Team logos**, upload a PNG, JPEG or WebP for each team (up to 5 MB). Images are resized to 256 × 256 with their proportions and transparency preserved, then saved inside your local match file. Logos update on connected displays immediately and follow the correct team when batting changes. Use **Replace logo** or **Remove** to change them. JSON match exports and archives include the logo image data; no separate image folder is needed.
+
+The scorebar has larger team logo areas, with a default 56 px logo size and extra padding. Change **Team logo size** between 32 and 72 px to suit your artwork.
+
+Under **Channel & sponsor logos**, upload separate images for the **top-left channel** and **top-right sponsor** positions. Each has its own width, top margin, side margin and visibility setting in **Top corner logo placement**. Click **Apply to broadcast** to save those placement changes. Wide branding images keep their proportions; both corner logos are independent of the scorebar's size and visibility. They are also included in match exports and archives. After upgrading, refresh the OBS Browser Source once to load the new corner-logo elements.
+
 Your existing ATEM HD8 switching, camera inputs, commentary audio and YouTube streaming remain in your production setup. This app supplies the graphics only. Multiple scoring tabs and overlay displays can connect independently. The overlay is read-only and needs no login; changing scores requires the access code.
 
 ## Scoring controls

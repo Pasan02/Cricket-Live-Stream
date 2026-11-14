@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let state = null, pending = false, connected = false, initialTab = false, initializedForms = false, editing = null, editingRevision = null, toastTimer;
+let state = null, pending = false, logoBusy = false, connected = false, initialTab = false, initializedForms = false, editing = null, editingRevision = null, toastTimer;
 let token = sessionStorage.getItem('cricketstream-local-token') || '';
 const overs = balls => `${Math.floor(balls / 6)}.${balls % 6}`;
 function el(tag, content, className) { const node = document.createElement(tag); if (content !== undefined) node.textContent = content; if (className) node.className = className; return node; }
@@ -41,7 +41,7 @@ async function post(action, body = {}, expectedRevision = state?.revision) {
 }
 function requestId() { const bytes = new Uint8Array(16); crypto.getRandomValues(bytes); return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join(''); }
 function updateControls() {
-  const locked = pending || !token || !state || !connected;
+  const locked = pending || logoBusy || !token || !state || !connected;
   const notPlaying = locked || !state?.active || state?.inningsComplete || state?.current?.awaitingBowler;
   document.querySelectorAll('[data-run], [data-extra], #wicket').forEach(b => b.disabled = notPlaying);
   for (const id of ['choose-bowler', 'swap', 'end-innings']) $(id).disabled = locked || !state?.active || state.inningsComplete;
@@ -49,6 +49,8 @@ function updateControls() {
   $('undo').disabled = locked || !state?.active || state.current === null || !state.history.length && !state.current.bowler;
   $('export').disabled = locked || !state?.active;
   document.querySelectorAll('#appearance-form button, #setup-form button, #history button, #action-content button, #match-notice button').forEach(b => b.disabled = locked);
+  document.querySelectorAll('[data-logo-upload]').forEach(b => b.disabled = locked);
+  document.querySelectorAll('[data-logo-remove]').forEach(b => b.disabled = locked || !state.appearance[b.dataset.logoRemove + 'Logo']);
 }
 function newBatterCanChange() {
   const inn = state?.current; if (!inn || inn.nextBat <= 2 || state.inningsComplete) return false;
@@ -63,6 +65,7 @@ function fillForms() {
 function render(data) {
   if (state && data.revision < state.revision) return;
   state = data;
+  renderTeamLogos();
   if (!initializedForms) { fillForms(); initializedForms = true; }
   if (!initialTab) { tab(data.active ? 'score' : 'setup'); initialTab = true; }
   const inn = data.current;
@@ -87,6 +90,54 @@ function render(data) {
   }
   updateControls();
 }
+function renderTeamLogos() {
+  const labels = {home: 'Home team', away: 'Away team', channel: 'Channel - top left', sponsor: 'Sponsor - top right'};
+  for (const side of ['home', 'away', 'channel', 'sponsor']) {
+    const image = $(side + '-logo-preview'), placeholder = $(side + '-logo-placeholder');
+    const src = state.appearance[side + 'Logo'] || '';
+    $(side + '-logo-name').textContent = state.config?.[side] || labels[side];
+    if (image.dataset.source !== src) {
+      image.dataset.source = src; image.hidden = !src; placeholder.hidden = Boolean(src);
+      if (src) image.src = src; else image.removeAttribute('src');
+    }
+  }
+}
+async function logoData(file, side) {
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Choose a PNG, JPEG or WebP image.');
+  if (file.size > 5 * 1024 * 1024) throw new Error('Choose an image smaller than 5 MB.');
+  // The server permits data: images. FileReader avoids a blob: preview URL,
+  // which is blocked by the image policy in already-running server instances.
+  const source = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('This image could not be read.'));
+    reader.onabort = () => reject(new Error('Image reading was cancelled.'));
+    reader.readAsDataURL(file);
+  });
+  const image = new Image();
+  await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = () => reject(new Error('This image could not be opened.')); image.src = source; });
+  if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth * image.naturalHeight > 16000000) throw new Error('Choose an image with no more than 16 million pixels.');
+  const canvas = document.createElement('canvas'), scale = Math.min(256 / image.naturalWidth, 256 / image.naturalHeight);
+  const width = image.naturalWidth * scale, height = image.naturalHeight * scale;
+  const teamLogo = side === 'home' || side === 'away';
+  canvas.width = teamLogo ? 256 : Math.max(1, Math.round(width));
+  canvas.height = teamLogo ? 256 : Math.max(1, Math.round(height));
+  const context = canvas.getContext('2d');
+  context.drawImage(image, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
+  return canvas.toDataURL('image/png');
+}
+document.querySelectorAll('[data-logo-upload]').forEach(button => button.addEventListener('click', () => $(button.dataset.logoUpload + '-logo-input').click()));
+for (const side of ['home', 'away', 'channel', 'sponsor']) {
+  $(side + '-logo-input').addEventListener('change', async event => {
+    const file = event.target.files[0]; if (!file) return;
+    logoBusy = true; updateControls();
+    try { const data = await logoData(file, side); if (await post('logo', {side, data})) toast('Logo updated on all displays.'); }
+    catch (error) { toast(error.message || 'Could not upload the logo.'); }
+    finally { event.target.value = ''; logoBusy = false; updateControls(); }
+  });
+  $(side + '-logo-preview').addEventListener('error', () => { $(side + '-logo-preview').hidden = true; $(side + '-logo-placeholder').hidden = false; });
+}
+document.querySelectorAll('[data-logo-remove]').forEach(button => button.addEventListener('click', async () => { if (await post('logo', {side: button.dataset.logoRemove, data: null})) toast('Logo removed.'); }));
 function renderHistory() {
   const rows = state.history.slice(-18).reverse();
   $('history').replaceChildren(...(rows.length ? rows.map(ball => { const b = el('button'); b.append(el('small', `INN ${ball.innings} · ${ball.position}`), document.createTextNode(ball.token)); b.title = 'Correct this delivery'; b.addEventListener('click', () => openEdit(ball)); return b; }) : [el('p', 'Your deliveries will appear here.', 'muted small')]));
@@ -143,8 +194,8 @@ $('setup-form').addEventListener('submit', async event => {
 $('appearance-form').elements.scale.addEventListener('input', event => $('scale-value').textContent = event.target.value + '%');
 $('appearance-form').addEventListener('submit', async event => {
   event.preventDefault(); const form = event.currentTarget, appearance = Object.fromEntries(new FormData(form));
-  for (const key of ['visible', 'ticker', 'flash']) appearance[key] = form.elements.namedItem(key).checked;
-  for (const key of ['scale', 'bottom', 'side']) appearance[key] = Number(appearance[key]);
+  for (const key of ['visible', 'ticker', 'flash', 'channelVisible', 'sponsorVisible']) appearance[key] = form.elements.namedItem(key).checked;
+  for (const key of ['scale', 'bottom', 'side', 'teamLogoSize', 'channelLogoWidth', 'sponsorLogoWidth', 'channelLogoTop', 'sponsorLogoTop', 'channelLogoSide', 'sponsorLogoSide']) appearance[key] = Number(appearance[key]);
   if (await post('appearance', {appearance})) toast('Overlay appearance updated.');
 });
 $('overlay-url').value = location.origin + '/overlay';

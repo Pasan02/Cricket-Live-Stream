@@ -5,6 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const {newDocument, snapshot, mutate, normalizeConfig, normalizeAppearance, replay} = require('./scoring.cjs');
+const {normalizeLogo} = require('./logos.cjs');
 
 function atomicWrite(file, value) {
   const temp = `${file}.tmp`;
@@ -39,9 +40,9 @@ function createApp({dataDir, password, addresses = []}) {
     const payload = `data: ${JSON.stringify(snapshot(document))}\n\n`;
     for (const res of listeners) { if (res.writableLength > 256 * 1024) res.destroy(); else res.write(payload); }
   };
-  const readBody = req => new Promise((resolve, reject) => {
+  const readBody = (req, limit = 64 * 1024) => new Promise((resolve, reject) => {
     let size = 0, chunks = [];
-    req.on('data', chunk => { size += chunk.length; if (size > 64 * 1024) { chunks = []; reject(Object.assign(new Error('Request too large.'), {status: 413})); req.resume(); } else chunks.push(chunk); });
+    req.on('data', chunk => { size += chunk.length; if (size > limit) { chunks = []; reject(Object.assign(new Error('Request too large.'), {status: 413})); req.resume(); } else chunks.push(chunk); });
     req.on('end', () => { try { const value = JSON.parse(Buffer.concat(chunks).toString() || '{}'); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); resolve(value); } catch { reject(new Error('Invalid JSON object.')); } });
     req.on('error', reject);
   });
@@ -54,6 +55,13 @@ function createApp({dataDir, password, addresses = []}) {
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (!allowed.has(url.hostname.toLowerCase())) return json(res, 421, {error: 'Use localhost or this computer’s LAN IP address.'});
       if (req.method === 'GET') {
+        const logoId = /^\/logos\/([a-f0-9]{64})\.png$/.exec(url.pathname)?.[1];
+        if (logoId) {
+          const image = document.logos?.[logoId];
+          if (typeof image !== 'string') return json(res, 404, {error: 'Logo not found.'});
+          res.writeHead(200, {'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=31536000, immutable'});
+          return res.end(Buffer.from(image, 'base64'));
+        }
         if (assets[url.pathname]) {
           const [name, mime] = assets[url.pathname]; res.writeHead(200, {'Content-Type': `${mime}; charset=utf-8`});
           return res.end(fs.readFileSync(path.join(__dirname, 'public', name)));
@@ -79,7 +87,7 @@ function createApp({dataDir, password, addresses = []}) {
       if (req.headers.origin !== `http://${req.headers.host}` || req.headers['sec-fetch-site'] === 'cross-site') return json(res, 403, {error: 'Cross-origin request rejected.'});
       if (!(req.headers['content-type'] || '').startsWith('application/json')) return json(res, 415, {error: 'Use JSON.'});
       if (url.pathname !== '/api/login' && !validSession(req)) return json(res, 401, {error: 'Sign in with the access code shown in the server terminal.'});
-      const body = await readBody(req);
+      const body = await readBody(req, url.pathname === '/api/logo' ? 512 * 1024 : 64 * 1024);
       if (url.pathname === '/api/login') {
         const ip = req.socket.remoteAddress, now = Date.now();
         const record = attempts.get(ip) || {count: 0, until: now + 600000};
@@ -96,11 +104,19 @@ function createApp({dataDir, password, addresses = []}) {
       }
       if (url.pathname === '/api/logout') { sessions.delete((req.headers.authorization || '').replace(/^Bearer /, '')); return json(res, 200, {ok: true}); }
       const action = url.pathname.replace('/api/', '');
-      if (!['setup', 'appearance', 'event', 'undo', 'edit'].includes(action)) return json(res, 404, {error: 'Not found.'});
+      if (!['setup', 'appearance', 'event', 'undo', 'edit', 'logo'].includes(action)) return json(res, 404, {error: 'Not found.'});
       if (!/^[a-zA-Z0-9-]{12,80}$/.test(body.requestId || '')) return json(res, 400, {error: 'Missing request identifier.'});
       if (document.requests.includes(body.requestId)) return json(res, 200, {ok: true, state: snapshot(document)});
       if (body.revision !== document.revision) return json(res, 409, {error: 'The score changed in another tab. Check the updated score, then try again.', state: snapshot(document)});
-      const next = mutate(document, action, body);
+      let next;
+      if (action === 'logo') {
+        if (!['home', 'away', 'channel', 'sponsor'].includes(body.side)) return json(res, 400, {error: 'Choose a team, channel or sponsor logo slot.'});
+        const logo = body.data === null ? null : normalizeLogo(body.data);
+        next = mutate(document, 'appearance', {appearance: {[body.side + 'Logo']: logo ? `/logos/${logo.id}.png` : ''}});
+        const retained = new Set(['home', 'away', 'channel', 'sponsor'].map(slot => next.appearance[slot + 'Logo']));
+        next.logos = Object.fromEntries(Object.entries(document.logos || {}).filter(([id]) => retained.has(`/logos/${id}.png`)));
+        if (logo) next.logos[logo.id] = logo.data;
+      } else next = mutate(document, action, body);
       next.requests = [...document.requests, body.requestId].slice(-200);
       if (action === 'setup' && document.config) {
         const archive = path.join(dataDir, 'archives'); fs.mkdirSync(archive, {recursive: true});
