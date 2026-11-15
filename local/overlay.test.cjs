@@ -81,8 +81,6 @@ test('MP4 logos are silent looping videos in team, corner and summary graphics',
   const summary = display('?view=scorecard'); summary.show(doc);
   const find = e => e.tagName === 'video' ? e : e.children.map(find).find(Boolean);
   assert.equal(find(summary.nodes['summary-graphic']).src, movie);
-  assert.equal(summary.nodes['summary-graphic'].style['--summary-panel'], doc.appearance.panelColour);
-  assert.equal(summary.nodes['summary-graphic'].style['--summary-text'], doc.appearance.textColour);
 });
 test('uploaded WebM logos render as transparent looping video in either corner', () => {
   const movie = `/logos/${'c'.repeat(64)}.webm`;

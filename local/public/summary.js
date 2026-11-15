@@ -1,5 +1,5 @@
 'use strict';
-// Classic light panels, with independently addressable cricket summary graphics.
+// Original Franchise styling, with independently addressable summary graphics.
 (() => {
   const node = (tag, text, className) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (className) e.className = className; return e; };
   const overs = balls => `${Math.floor(balls / 6)}.${balls % 6}`;
@@ -103,7 +103,6 @@
     const key = `${data.revision}:${mode}:${selected}`;
     if (root.dataset.frame === key) return;
     root.dataset.frame = key; root.dataset.mode = mode;
-    root.style.setProperty('--summary-panel', data.appearance.panelColour); root.style.setProperty('--summary-text', data.appearance.textColour);
     const inn = selected === '1' || selected === '2' ? data.innings[Number(selected) - 1] : data.current;
     const side = inn ? mode === 'bowling' ? !inn.homeBatting : inn.homeBatting : true;
     root.style.setProperty('--summary-accent', side ? data.appearance.homeColour : data.appearance.awayColour);

@@ -40,6 +40,18 @@ test('scoring page permits data URL logo previews without permitting remote imag
   assert.deepEqual(policy.get('script-src'), ["'self'"]);
   assert.deepEqual(policy.get('media-src'), ["'self'", 'data:']);
 });
+
+test('Franchise fonts are served locally as unmodified TrueType files', async t => {
+  const {base} = await fixture(t);
+  for (const weight of ['Medium', 'SemiBold', 'Bold', 'ExtraBold', 'Black']) {
+    const response = await fetch(base + `/fonts/BarlowCondensed-${weight}.ttf`);
+    assert.equal(response.status, 200); assert.equal(response.headers.get('content-type'), 'font/ttf');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.equal(bytes.readUInt32BE(0), 0x00010000);
+    assert.ok(bytes.length > 100000);
+  }
+  assert.equal((await fetch(base + '/fonts/missing.ttf')).status, 404);
+});
 test('save, duplicate request, concurrent edit, export, archive and restart persistence', async t => {
   const {dir, base, post, token} = await fixture(t);
   const request = {revision: 0, requestId: 'request-setup-0001', config: {home: 'Test Home', away: 'Test Away', maxOvers: 20}};

@@ -58,7 +58,7 @@ Each URL stays on its own graphic; switch scenes or source visibility in OBS. Th
 
 Under **Optional: switch graphics on the main scorebar source**, you can change the main overlay instead. These buttons and the main-source innings selector do not change the three dedicated sources.
 
-The summary cards use the earlier Classic light panels and team-colour accents. Panel and text colours from Overlay studio apply to the summaries as well as the scorebar. Corrected cricket terminology and the three independent OBS URLs are retained. Uploaded team, channel and sponsor logos can appear on all graphics.
+All three summary overlays use the original repository's **Franchise** styling: royal-purple gradients, gold totals and dividers, and **Barlow Condensed** typography. The existing two-innings match summary, full innings scorecard and bowling analysis keep their layouts and figures. Fonts are bundled locally with their SIL Open Font License, so OBS needs no internet font service. Team colours remain as small team accents; the scorebar panel/text colour controls apply to the live scorebar. Uploaded image, MP4 and WebM logos work on these graphics, with channel at the top right and sponsor at the top left. Refresh each OBS Browser Source after upgrading to load the new styles and fonts.
 
 Labels use **Innings scorecard**, **Match summary** and **Bowling analysis**. Batters who have not appeared are **yet to bat** during the innings and **did not bat** after it ends. Bowling economy is runs conceded per over, calculated from legal balls. Figures update after corrections and undo.
 

@@ -28,7 +28,12 @@ function createApp({dataDir, password, addresses = []}) {
   const assets = {'/': ['index.html', 'text/html'], '/scoring': ['index.html', 'text/html'],
     '/overlay': ['overlay.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/media.js': ['media.js', 'text/javascript'],
     '/overlay.js': ['overlay.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'],
-    '/overlay.css': ['overlay.css', 'text/css'], '/summary.js': ['summary.js', 'text/javascript'], '/summary.css': ['summary.css', 'text/css']};
+    '/overlay.css': ['overlay.css', 'text/css'], '/summary.js': ['summary.js', 'text/javascript'], '/summary.css': ['summary.css', 'text/css'],
+    '/fonts/BarlowCondensed-Medium.ttf': ['fonts/BarlowCondensed-Medium.ttf', 'font/ttf'],
+    '/fonts/BarlowCondensed-SemiBold.ttf': ['fonts/BarlowCondensed-SemiBold.ttf', 'font/ttf'],
+    '/fonts/BarlowCondensed-Bold.ttf': ['fonts/BarlowCondensed-Bold.ttf', 'font/ttf'],
+    '/fonts/BarlowCondensed-ExtraBold.ttf': ['fonts/BarlowCondensed-ExtraBold.ttf', 'font/ttf'],
+    '/fonts/BarlowCondensed-Black.ttf': ['fonts/BarlowCondensed-Black.ttf', 'font/ttf']};
   const json = (res, code, data) => { res.writeHead(code, {'Content-Type': 'application/json; charset=utf-8'}); res.end(JSON.stringify(data)); };
   const validSession = req => {
     const token = (req.headers.authorization || '').replace(/^Bearer /, '');
@@ -75,7 +80,7 @@ function createApp({dataDir, password, addresses = []}) {
           res.writeHead(200, {...headers, 'Content-Length': bytes.length}); return res.end(bytes);
         }
         if (assets[url.pathname]) {
-          const [name, mime] = assets[url.pathname]; res.writeHead(200, {'Content-Type': `${mime}; charset=utf-8`});
+          const [name, mime] = assets[url.pathname]; res.writeHead(200, {'Content-Type': mime.startsWith('font/') ? mime : `${mime}; charset=utf-8`});
           return res.end(fs.readFileSync(path.join(__dirname, 'public', name)));
         }
         if (url.pathname === '/api/state') return json(res, 200, snapshot(document));
