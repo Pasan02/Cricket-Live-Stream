@@ -1,12 +1,89 @@
 'use strict';
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {newDocument, mutate, replay} = require('./scoring.cjs');
+const {newDocument, mutate, replay, snapshot} = require('./scoring.cjs');
 function match(overs = 20) {
   let doc = mutate(newDocument(), 'setup', {config: {home: 'Home', away: 'Away', maxOvers: overs}});
   return mutate(doc, 'event', {event: {type: 'bowler', name: 'Away 1'}});
 }
 const ball = (doc, kind = 'run', runs = 0, extra = {}) => mutate(doc, 'event', {event: {type: 'ball', kind, runs, ...extra}});
+
+test('choose both opening batters and first-ball striker in either innings; undo restores defaults', () => {
+  let doc = mutate(newDocument(), 'setup', {config: {home: 'Home', away: 'Away'}});
+  const defaults = doc;
+  doc = mutate(doc, 'event', {event: {type: 'openers', striker: 'Home 5', nonStriker: 'Home 8'}});
+  let inn = replay(doc).current;
+  assert.equal(inn.batters[inn.striker].name, 'Home 5'); assert.equal(inn.batters[inn.nonStriker].name, 'Home 8');
+  assert.equal(inn.batters[2].name, 'Home 1'); assert.equal(new Set(inn.batters.map(b => b.name)).size, 11);
+  assert.equal(snapshot(doc).canUndo, true); assert.deepEqual(replay(mutate(doc, 'undo', {})), replay(defaults));
+  doc = mutate(doc, 'event', {event: {type: 'bowler', name: 'Away 1'}}); doc = ball(doc, 'run', 4);
+  assert.equal(replay(doc).current.batters[0].runs, 4);
+  doc = mutate(doc, 'event', {event: {type: 'end'}}); doc = mutate(doc, 'event', {event: {type: 'next'}});
+  doc = mutate(doc, 'event', {event: {type: 'openers', striker: 'Away 7', nonStriker: 'Away 3'}});
+  doc = mutate(doc, 'event', {event: {type: 'bowler', name: 'Home 9'}}); doc = ball(doc);
+  inn = replay(doc).current;
+  assert.equal(inn.batters[inn.striker].name, 'Away 7'); assert.equal(inn.batters[0].balls, 1);
+  assert.deepEqual(replay(JSON.parse(JSON.stringify(doc))), replay(doc));
+});
+
+test('opening selection rejects duplicate/opposition players and all deliveries lock it, including wides', () => {
+  const start = match();
+  for (const [striker, nonStriker] of [['Home 1', 'Home 1'], ['Home 1', 'Away 2'], ['', 'Home 2']]) assert.throws(() => mutate(start, 'event', {event: {type: 'openers', striker, nonStriker}}));
+  for (const kind of ['wide', 'noball', 'run']) {
+    const doc = ball(start, kind);
+    assert.throws(() => mutate(doc, 'event', {event: {type: 'openers', striker: 'Home 3', nonStriker: 'Home 4'}}), /before the first delivery/);
+  }
+});
+
+test('name corrections preserve both innings and update only the right team, including dismissals', () => {
+  let doc = mutate(newDocument(), 'setup', {config: {home: 'Home', away: 'Away', homeXI: ['Shared', 'Fielder'], awayXI: ['Shared', 'Fielder']}});
+  doc = mutate(doc, 'event', {event: {type: 'bowler', name: 'Shared'}});
+  doc = ball(doc, 'run', 4); doc = ball(doc, 'wicket', 0, {dismissal: 'caught', fielder: 'Fielder'});
+  doc = mutate(doc, 'event', {event: {type: 'end'}}); doc = mutate(doc, 'event', {event: {type: 'next'}});
+  doc = mutate(doc, 'event', {event: {type: 'bowler', name: 'Shared'}});
+  doc = ball(doc, 'wicket', 0, {dismissal: 'caught', fielder: 'Fielder'});
+  const before = replay(doc), count = doc.events.length;
+  const names = [...doc.config.homeXI]; names[0] = 'Home Captain'; names[1] = 'Home Keeper';
+  doc = mutate(doc, 'players', {side: 'home', names});
+  const after = replay(doc);
+  assert.equal(doc.events.length, count);
+  assert.equal(after.innings[0].batters[0].name, 'Home Captain');
+  assert.equal(after.innings[0].batters[0].out, 'caught (Fielder) b Shared');
+  assert.equal(after.innings[1].batters[0].name, 'Shared');
+  assert.equal(after.innings[1].batters[0].out, 'caught (Home Keeper) b Home Captain');
+  assert.deepEqual(after.innings.map(i => [i.total, i.wickets, i.legal, i.extras]), before.innings.map(i => [i.total, i.wickets, i.legal, i.extras]));
+  assert.equal(after.innings[0].bowlers.Shared.runs, 4); assert.equal(after.current.bowlers['Home Captain'].wickets, 1);
+  assert.deepEqual(replay(JSON.parse(JSON.stringify(doc))), after);
+  doc = mutate(doc, 'undo', {}); assert.equal(replay(doc).current.bowler, 'Home Captain');
+});
+
+test('renaming selected openers, replacement batters and bowlers keeps their figures and corrections', () => {
+  let doc = match();
+  doc = mutate(doc, 'event', {event: {type: 'openers', striker: 'Home 5', nonStriker: 'Home 6'}});
+  doc = ball(doc, 'run', 4); doc = ball(doc, 'wicket', 0, {dismissal: 'bowled'});
+  doc = mutate(doc, 'event', {event: {type: 'batter', name: 'Home 9'}});
+  doc = ball(doc, 'run', 2);
+  const names = [...doc.config.homeXI]; names[4] = 'Alice'; names[8] = 'New Batter';
+  doc = mutate(doc, 'players', {side: 'home', names});
+  const bowlers = [...doc.config.awayXI]; bowlers[0] = '__proto__';
+  doc = mutate(doc, 'players', {side: 'away', names: bowlers});
+  let inn = replay(doc).current;
+  assert.equal(inn.batters[0].name, 'Alice'); assert.equal(inn.batters[0].runs, 4);
+  assert.equal(inn.batters[2].name, 'New Batter'); assert.equal(inn.batters[2].runs, 2);
+  assert.equal(inn.batters[0].out, 'bowled b __proto__'); assert.equal(inn.bowlers.__proto__.runs, 6);
+  doc = mutate(doc, 'edit', {index: doc.events.length - 1, event: {kind: 'run', runs: 6}});
+  inn = replay(doc).current; assert.equal(inn.batters[2].runs, 6); assert.equal(inn.bowlers.__proto__.runs, 10);
+});
+
+test('simultaneous name swaps preserve player identities and invalid roster edits are atomic', () => {
+  const original = ball(match(), 'run', 4), saved = JSON.stringify(original);
+  const names = [...original.config.homeXI]; [names[0], names[1]] = [names[1], names[0]];
+  const renamed = mutate(original, 'players', {side: 'home', names});
+  assert.equal(replay(renamed).current.batters[0].name, 'Home 2'); assert.equal(replay(renamed).current.batters[0].runs, 4);
+  for (const replacement of [names.slice(0, 10), ['', ...names.slice(1)], [names[1], ...names.slice(1)], ['x'.repeat(65), ...names.slice(1)], [null, ...names.slice(1)]]) assert.throws(() => mutate(original, 'players', {side: 'home', names: replacement}));
+  assert.throws(() => mutate(original, 'players', {side: '__proto__', names}));
+  assert.equal(JSON.stringify(original), saved);
+});
 test('runs, extras, strike and bowling figures follow the scoring book', () => {
   let doc = match();
   doc = ball(doc, 'run', 1); doc = ball(doc, 'wide', 2); doc = ball(doc, 'noball', 4); doc = ball(doc, 'bye', 2); doc = ball(doc, 'legbye', 1);

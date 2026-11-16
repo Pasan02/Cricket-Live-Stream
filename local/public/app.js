@@ -52,7 +52,9 @@ function updateControls() {
   document.querySelectorAll('[data-run], [data-extra], #wicket').forEach(b => b.disabled = notPlaying);
   for (const id of ['choose-bowler', 'swap', 'end-innings']) $(id).disabled = locked || !state?.active || state.inningsComplete;
   $('choose-batter').disabled = locked || !newBatterCanChange();
-  $('undo').disabled = locked || !state?.active || state.current === null || !state.history.length && !state.current.bowler;
+  $('choose-openers').disabled = locked || !canChooseOpeners();
+  $('edit-players').disabled = locked || !state?.active;
+  $('undo').disabled = locked || !state?.active || !(state.canUndo ?? (state.history.length > 0 || Boolean(state.current?.bowler)));
   $('export').disabled = locked || !state?.active;
   document.querySelectorAll('[data-summary], #summary-innings').forEach(button => button.disabled = locked || !state?.active);
   document.querySelectorAll('#appearance-form button, #setup-form button, #history button, #action-content button, #match-notice button').forEach(b => b.disabled = locked);
@@ -62,6 +64,9 @@ function updateControls() {
 function newBatterCanChange() {
   const inn = state?.current; if (!inn || inn.nextBat <= 2 || state.inningsComplete) return false;
   return [inn.striker, inn.nonStriker].some(i => i === inn.nextBat - 1 && inn.batters[i].balls === 0 && !inn.batters[i].out);
+}
+function canChooseOpeners() {
+  return Boolean(state?.active && !state.inningsComplete && !state.history.some(ball => ball.innings === state.current.number));
 }
 function setConnected(value) { connected = value; $('connection').textContent = value ? 'Desk connected' : 'Reconnecting…'; $('connection').classList.toggle('online', value); updateControls(); }
 function fillForms() {
@@ -200,6 +205,65 @@ async function record(event) {
   if (result) { editing = null; $('action-dialog').close(); }
 }
 function chooseBowler() { choices('Who bowls next?', state.current.fielders.map(name => [name, async () => { if (await post('event', {event: {type: 'bowler', name}})) $('action-dialog').close(); }])); }
+async function playerToolsReady() {
+  if ((await runtimeReady)?.playerEditing) return true;
+  toast('Restart the scoreboard app and refresh this page to enable opening-batter selection and name corrections.'); return false;
+}
+async function chooseOpeners() {
+  if (!await playerToolsReady() || !canChooseOpeners()) return;
+  editing = null;
+  const inn = state.current, revision = state.revision, form = el('form');
+  form.append(el('p', `${inn.batting}: choose who faces the first ball and who opens at the other end.`, 'muted small'));
+  function select(label, selected) {
+    const field = el('label', label), input = el('select'); input.required = true;
+    inn.batters.forEach(b => { const option = el('option', b.name); option.value = b.name; input.append(option); });
+    input.value = selected; field.append(input); form.append(field); return input;
+  }
+  const striker = select('Striker · faces the first ball', inn.batters[inn.striker].name);
+  const nonStriker = select('Non-striker', inn.batters[inn.nonStriker].name);
+  function differentPlayers() {
+    nonStriker.setCustomValidity(striker.value === nonStriker.value ? 'Choose two different opening batters.' : '');
+  }
+  striker.addEventListener('change', differentPlayers); nonStriker.addEventListener('change', differentPlayers);
+  const submit = el('button', 'Save opening batters', 'primary full'); submit.type = 'submit'; form.append(submit);
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); differentPlayers(); if (!form.reportValidity()) return;
+    if (await post('event', {event: {type: 'openers', striker: striker.value, nonStriker: nonStriker.value}}, revision)) {
+      $('action-dialog').close(); toast('Opening batters updated.');
+    } else if (state.revision !== revision) {
+      $('action-dialog').close(); toast('The match changed. Reopen opening-batter selection to review the current innings.');
+    }
+  });
+  openDialog('Choose opening batters', form);
+}
+function editPlayerNames(side) {
+  editing = null;
+  const revision = state.revision, names = state.config[side + 'XI'], form = el('form');
+  form.append(el('p', 'Correct player names here. Their runs, wickets and recorded deliveries stay with the same player.', 'muted small'));
+  const inputs = names.map((name, index) => {
+    const label = el('label', `Player ${index + 1}`), input = el('input');
+    input.type = 'text'; input.value = name; input.required = true; input.maxLength = 64;
+    label.append(input); form.append(label); return input;
+  });
+  const submit = el('button', 'Save player names', 'primary full'); submit.type = 'submit'; form.append(submit);
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const corrected = inputs.map(input => input.value.trim());
+    if (corrected.some(name => !name) || new Set(corrected).size !== corrected.length) { toast('Enter a different, non-blank name for each player.'); return; }
+    if (await post('players', {side, names: corrected}, revision)) {
+      $('setup-form').elements.namedItem(side + 'XI').value = state.config[side + 'XI'].join('\n');
+      $('action-dialog').close(); toast('Player names updated on all overlays.');
+    } else if (state.revision !== revision) {
+      $('action-dialog').close(); toast('The match changed. Reopen player names to review the latest roster.');
+    }
+  });
+  openDialog(`${state.config[side]} · player names`, form);
+}
+$('choose-openers').addEventListener('click', chooseOpeners);
+$('edit-players').addEventListener('click', async () => {
+  if (!await playerToolsReady() || !state?.active) return;
+  choices('Edit player names', ['home', 'away'].map(side => [state.config[side], () => editPlayerNames(side)]));
+});
 $('choose-bowler').addEventListener('click', chooseBowler);
 $('choose-batter').addEventListener('click', () => { choices('Choose the new batter', state.current.batters.slice(state.current.nextBat).map(b => [b.name, async () => { if (await post('event', {event: {type: 'batter', name: b.name}})) $('action-dialog').close(); }])); });
 document.querySelectorAll('[data-run]').forEach(b => b.addEventListener('click', () => { editing = null; record({kind: 'run', runs: Number(b.dataset.run)}); }));
@@ -227,7 +291,7 @@ $('setup-form').addEventListener('submit', async event => {
   event.preventDefault(); if (state.active && !confirm('Start a new match? The current match will be archived.')) return;
   const form = new FormData(event.currentTarget), config = Object.fromEntries(form);
   config.maxOvers = Number(config.maxOvers); for (const key of ['homeXI', 'awayXI']) config[key] = config[key].split(/\r?\n/).map(n => n.trim()).filter(Boolean);
-  if (await post('setup', {config, replace: state.active})) { tab('score'); toast('Match ready. Choose the opening bowler.'); }
+  if (await post('setup', {config, replace: state.active})) { tab('score'); toast('Match ready. Choose opening batters and the opening bowler.'); }
 });
 $('appearance-form').elements.scale.addEventListener('input', event => $('scale-value').textContent = event.target.value + '%');
 $('appearance-form').addEventListener('submit', async event => {

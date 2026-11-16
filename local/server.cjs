@@ -84,7 +84,7 @@ function createApp({dataDir, password, addresses = []}) {
           return res.end(fs.readFileSync(path.join(__dirname, 'public', name)));
         }
         if (url.pathname === '/api/state') return json(res, 200, snapshot(document));
-        if (url.pathname === '/api/info') return json(res, 200, {apiVersion: 3, videoLogos: true, webmLogos: true, addresses, port: server.address()?.port});
+        if (url.pathname === '/api/info') return json(res, 200, {apiVersion: 3, videoLogos: true, webmLogos: true, playerEditing: true, addresses, port: server.address()?.port});
         if (url.pathname === '/api/session') return json(res, validSession(req) ? 200 : 401, {ok: validSession(req)});
         if (url.pathname === '/api/export') {
           if (!validSession(req)) return json(res, 401, {error: 'Sign in to export.'});
@@ -121,7 +121,7 @@ function createApp({dataDir, password, addresses = []}) {
       }
       if (url.pathname === '/api/logout') { sessions.delete((req.headers.authorization || '').replace(/^Bearer /, '')); return json(res, 200, {ok: true}); }
       const action = url.pathname.replace('/api/', '');
-      if (!['setup', 'appearance', 'event', 'undo', 'edit', 'logo'].includes(action)) return json(res, 404, {error: 'Not found.'});
+      if (!['setup', 'appearance', 'event', 'undo', 'edit', 'logo', 'players'].includes(action)) return json(res, 404, {error: 'Not found.'});
       if (!/^[a-zA-Z0-9-]{12,80}$/.test(body.requestId || '')) return json(res, 400, {error: 'Missing request identifier.'});
       if (document.requests.includes(body.requestId)) return json(res, 200, {ok: true, state: snapshot(document)});
       if (body.revision !== document.revision) return json(res, 409, {error: 'The score changed in another tab. Check the updated score, then try again.', state: snapshot(document)});

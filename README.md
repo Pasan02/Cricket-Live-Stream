@@ -68,6 +68,8 @@ This version uses port **5081** to avoid older instances still running on 5080. 
 
 - Runs, wides, no balls with runs off the bat, byes, leg byes, wickets and run outs with completed runs.
 - Bowler selection after each over, changing the newly arrived batter, and manual strike swaps.
+- **Choose opening batters**, under the two current batters on the scoring desk, selects the striker (faces the first ball) and non-striker from the batting XI. Use it before the first delivery of either innings, including before any wides or no balls. The first two roster names remain the defaults. The remaining batting order is preserved, and opening selection can be undone.
+- **Edit player names**, beside the opening-batter control, corrects all 11 names for either team at any stage, including after the match. Scores stay with the same players, and names update in batting, bowling, dismissals, saved deliveries and all overlays. Keep names unique within each team. These are name corrections; they do not reorder the players or reset the match. Scoring undo keeps corrected names; edit the names again to reverse a correction.
 - **Undo last action** includes deliveries, bowler selections and innings changes. Select a recent ball to correct it. If a correction would invalidate later actions, undo those actions first.
 - Two innings with an automatic target and win/tie result. Ending an innings manually assumes it is complete; it does not model abandonment.
 - Concurrent submissions are checked against the saved revision. When another tab saves first, review the refreshed score before retrying.

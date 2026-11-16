@@ -155,6 +155,14 @@ function replay(doc) {
         [inn.batters[arrived], inn.batters[index]] = [inn.batters[index], inn.batters[arrived]];
         break;
       }
+      case 'openers': {
+        requireThat(!complete(inn, cfg) && !history.some(ball => ball.innings === inn.number), 'Choose opening batters before the first delivery of this innings.');
+        const striker = inn.batters.find(b => b.name === event.striker), nonStriker = inn.batters.find(b => b.name === event.nonStriker);
+        requireThat(striker && nonStriker && striker !== nonStriker, 'Choose two different batters from the batting XI.');
+        inn.batters = [striker, nonStriker, ...inn.batters.filter(b => b !== striker && b !== nonStriker)];
+        inn.striker = 0; inn.nonStriker = 1;
+        break;
+      }
       case 'swap': requireThat(!complete(inn, cfg), 'This innings has ended.'); swap(inn); break;
       case 'end': requireThat(!complete(inn, cfg), 'This innings has already ended.'); inn.ended = true; break;
       case 'next':
@@ -172,7 +180,28 @@ function replay(doc) {
   }
   return {active: true, innings, current, history, result, matchOver, inningsComplete: complete(current, cfg)};
 }
-function snapshot(doc) { return {revision: doc.revision, config: doc.config, appearance: doc.appearance, ...replay(doc)}; }
+function snapshot(doc) { return {revision: doc.revision, config: doc.config, appearance: doc.appearance, canUndo: doc.events.length > 0, ...replay(doc)}; }
+function renamePlayers(doc, body) {
+  requireThat(body.side === 'home' || body.side === 'away', 'Choose the home or away team.');
+  const key = body.side + 'XI', previous = doc.config[key];
+  requireThat(Array.isArray(body.names) && body.names.length === previous.length, 'Keep all 11 players when correcting names.');
+  requireThat(body.names.every(name => typeof name === 'string' && name.trim().length > 0 && name.trim().length <= 64), 'Enter a name of 1–64 characters for every player.');
+  const names = body.names.map(name => name.trim());
+  requireThat(new Set(names).size === names.length, 'Player names must be unique within each team.');
+  // Replace by roster slot in one pass so name swaps never merge two players.
+  const renamed = new Map(previous.map((name, index) => [name, names[index]]));
+  const rename = name => renamed.has(name) ? renamed.get(name) : name;
+  doc.config[key] = names;
+  let innings = 1;
+  for (const event of doc.events) {
+    const homeBatting = (doc.config.battingFirst === 'home') === (innings === 1);
+    const batting = homeBatting === (body.side === 'home');
+    if ((event.type === 'bowler' && !batting) || (event.type === 'batter' && batting)) event.name = rename(event.name);
+    if (event.type === 'openers' && batting) { event.striker = rename(event.striker); event.nonStriker = rename(event.nonStriker); }
+    if (event.type === 'ball' && event.kind === 'wicket' && !batting && event.fielder) event.fielder = rename(event.fielder);
+    if (event.type === 'next') innings++;
+  }
+}
 function mutate(original, action, body) {
   const doc = clone(original);
   if (action === 'setup') {
@@ -183,7 +212,8 @@ function mutate(original, action, body) {
     doc.appearance = normalizeAppearance({...doc.appearance, ...(body.appearance || {})});
   } else {
     requireThat(doc.config, 'Set up a match first.');
-    if (action === 'undo') { requireThat(doc.events.length > 0, 'Nothing to undo.'); doc.events.pop(); }
+    if (action === 'players') renamePlayers(doc, body);
+    else if (action === 'undo') { requireThat(doc.events.length > 0, 'Nothing to undo.'); doc.events.pop(); }
     else if (action === 'edit') {
       integer(body.index, 0, doc.events.length - 1, 'Ball index');
       requireThat(doc.events[body.index].type === 'ball', 'Choose a delivery to correct.');

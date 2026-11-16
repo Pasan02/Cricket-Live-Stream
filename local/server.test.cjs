@@ -65,6 +65,39 @@ test('save, duplicate request, concurrent edit, export, archive and restart pers
   response = await post('setup', {...request, revision: 1, requestId: 'request-setup-0002', replace: true}, token); assert.equal(response.status, 200);
   assert.equal(fs.readdirSync(path.join(dir, 'archives')).length, 1);
 });
+
+test('opening choices and name corrections are authenticated, revision-checked and persistent', async t => {
+  const {base, post, token, dir} = await fixture(t);
+  const info = await (await fetch(base + '/api/info')).json(); assert.equal(info.playerEditing, true);
+  await post('setup', {revision: 0, requestId: 'players-setup-00001', config: {home: 'Home', away: 'Away'}}, token);
+  let response = await post('event', {revision: 1, requestId: 'players-openers-001', event: {type: 'openers', striker: 'Home 5', nonStriker: 'Home 8'}}, token);
+  assert.equal(response.status, 200); assert.equal((await response.json()).state.current.batters[0].name, 'Home 5');
+  await post('event', {revision: 2, requestId: 'players-bowler-001', event: {type: 'bowler', name: 'Away 2'}}, token);
+  await post('event', {revision: 3, requestId: 'players-ball-00001', event: {type: 'ball', kind: 'run', runs: 4}}, token);
+  const before = await (await fetch(base + '/api/state')).json();
+  const names = [...before.config.homeXI]; names[4] = 'Opening Player';
+  const body = {revision: 4, requestId: 'players-rename-001', side: 'home', names};
+  assert.equal((await post('players', body)).status, 401);
+  assert.equal((await post('players', body, token, 'http://evil.example')).status, 403);
+  assert.equal((await post('players', {...body, names: Array(11).fill('duplicate')}, token)).status, 400);
+  assert.equal((await post('players', {...body, revision: 3}, token)).status, 409);
+  response = await post('players', body, token); assert.equal(response.status, 200);
+  const state = (await response.json()).state;
+  assert.equal(state.revision, 5); assert.equal(state.current.total, 4); assert.equal(state.current.batters[0].name, 'Opening Player');
+  assert.equal(state.current.batters[0].runs, 4); assert.deepEqual(state.appearance, before.appearance);
+  response = await post('players', body, token); assert.equal(response.status, 200); assert.equal((await response.json()).state.revision, 5);
+  const exported = await (await fetch(base + '/api/export', {headers: {Authorization: 'Bearer ' + token}})).json();
+  assert.equal(exported.config.homeXI[4], 'Opening Player'); assert.equal(exported.events[0].striker, 'Opening Player');
+  const restarted = createApp({dataDir: dir, password: 'test-password'});
+  await new Promise(resolve => restarted.listen(0, '127.0.0.1', resolve));
+  try {
+    const persisted = await (await fetch(`http://127.0.0.1:${restarted.address().port}/api/state`)).json();
+    assert.equal(persisted.current.batters[0].name, 'Opening Player'); assert.equal(persisted.current.batters[0].runs, 4);
+  } finally { restarted.stop(); }
+  response = await post('undo', {revision: 5, requestId: 'players-undo-00001'}, token);
+  const undone = (await response.json()).state;
+  assert.equal(undone.current.total, 0); assert.equal(undone.current.batters[0].name, 'Opening Player');
+});
 test('two display consumers get identical updates and neither consumes scoring events', async t => {
   const {base, post, token} = await fixture(t), controller = new AbortController();
   t.after(() => controller.abort());
